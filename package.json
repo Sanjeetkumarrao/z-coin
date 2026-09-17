@@ -1,0 +1,29 @@
+{
+  "name": "z-coin",
+  "version": "1.0.0",
+  "description": "��#\u0000 \u0000z\u0000-\u0000c\u0000o\u0000i\u0000n\u0000\r\u0000 \u0000",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sanjeetkumarrao/z-coin.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/Sanjeetkumarrao/z-coin/issues"
+  },
+  "homepage": "https://github.com/Sanjeetkumarrao/z-coin#readme",
+  "dependencies": {
+    "crypto-js": "^4.2.0"
+  },
+  "devDependencies": {
+    "@types/crypto-js": "^4.2.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^7.0.2"
+  }
+}
