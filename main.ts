@@ -3,12 +3,26 @@ import { WebSocketServer, WebSocket } from 'ws';
 import CryptoJS from 'crypto-js';
 import cors from 'cors';
 
+class Transaction {
+    public id: string;
+    public sender: string;
+    public receiver: string;
+    public amount: number;
+
+    constructor(sender: string, receiver: string, amount: number) {
+        this.sender = sender;
+        this.receiver = receiver;
+        this.amount = amount;
+        this.id = CryptoJS.SHA256(sender + receiver + amount + Date.now()).toString();
+    }
+}
+
 class Block {
     public index: number;
     public hash: string;
     public previousHash: string;
     public timestamp: number;
-    public data: string;
+    public transactions: Transaction[];
     public difficulty: number;
     public nonce: number;
 
@@ -17,14 +31,14 @@ class Block {
         hash: string,
         previousHash: string,
         timestamp: number,
-        data: string,
+        transactions: Transaction[],
         difficulty: number,
         nonce: number
     ) {
         this.index = index;
         this.previousHash = previousHash;
         this.timestamp = timestamp;
-        this.data = data;
+        this.transactions = transactions;
         this.hash = hash;
         this.difficulty = difficulty;
         this.nonce = nonce;
@@ -35,11 +49,11 @@ const calculateHash = (
     index: number,
     previousHash: string,
     timestamp: number,
-    data: string,
+    transactions: Transaction[],
     difficulty: number,
     nonce: number
 ): string => {
-    return CryptoJS.SHA256(index + previousHash + timestamp + data + difficulty + nonce).toString();
+    return CryptoJS.SHA256(index + previousHash + timestamp + JSON.stringify(transactions) + difficulty + nonce).toString();
 };
 
 const hashMatchesDifficulty = (hash: string, difficulty: number): boolean => {
@@ -51,14 +65,14 @@ const findBlock = (
     index: number,
     previousHash: string,
     timestamp: number,
-    data: string,
+    transactions: Transaction[],
     difficulty: number
 ): Block => {
     let nonce = 0;
     while (true) {
-        const hash = calculateHash(index, previousHash, timestamp, data, difficulty, nonce);
+        const hash = calculateHash(index, previousHash, timestamp, transactions, difficulty, nonce);
         if (hashMatchesDifficulty(hash, difficulty)) {
-            return new Block(index, hash, previousHash, timestamp, data, difficulty, nonce);
+            return new Block(index, hash, previousHash, timestamp, transactions, difficulty, nonce);
         }
         nonce++;
     }
@@ -67,13 +81,15 @@ const findBlock = (
 const getGenesisBlock = (): Block => {
     const timestamp = 1700000000;
     const difficulty = 2;
-    const genesisHash = calculateHash(0, '0', timestamp, 'Genesis Block - Start of z-coin', difficulty, 0);
-    return new Block(0, genesisHash, '0', timestamp, 'Genesis Block - Start of z-coin', difficulty, 0);
+    const genesisTx = new Transaction("Network", "Genesis Miner", 50);
+    const genesisHash = calculateHash(0, '0', timestamp, [genesisTx], difficulty, 0);
+    return new Block(0, genesisHash, '0', timestamp, [genesisTx], difficulty, 0);
 };
 
 class Blockchain {
     private chain: Block[];
     private difficulty: number = 2;
+    public mempool: Transaction[] = [];
 
     constructor() {
         this.chain = [getGenesisBlock()];
@@ -83,34 +99,35 @@ class Blockchain {
         return this.chain[this.chain.length - 1];
     }
 
-    public generateNextBlock(blockData: string): Block {
+    public addTransactionToMempool(tx: Transaction): boolean {
+        this.mempool.push(tx);
+        return true;
+    }
+
+    public generateNextBlock(minerAddress: string): Block {
         const previousBlock: Block = this.getLatestBlock();
         const nextIndex: number = previousBlock.index + 1;
         const nextTimestamp: number = Math.floor(Date.now() / 1000);
+
+        // Coinbase reward transaction for miner
+        const rewardTx = new Transaction("Network", minerAddress, 50);
+        const blockTransactions = [rewardTx, ...this.mempool];
 
         const newBlock = findBlock(
             nextIndex,
             previousBlock.hash,
             nextTimestamp,
-            blockData,
+            blockTransactions,
             this.difficulty
         );
 
         this.chain.push(newBlock);
+        this.mempool = []; // Clear mempool after mining
         return newBlock;
     }
 
     public getChain(): Block[] {
         return this.chain;
-    }
-
-    public replaceChain(newBlocks: Block[]): boolean {
-        if (newBlocks.length > this.chain.length) {
-            console.log('Received blockchain is longer. Replacing current chain...');
-            this.chain = newBlocks;
-            return true;
-        }
-        return false;
     }
 }
 
@@ -188,9 +205,8 @@ const handleBlockchainResponse = (receivedBlocks: Block[]) => {
     const latestBlockHeld: Block = zCoin.getLatestBlock();
 
     if (latestBlockReceived.index > latestBlockHeld.index) {
-        console.log(`Block ahead. Local: ${latestBlockHeld.index}, Network: ${latestBlockReceived.index}`);
         if (latestBlockHeld.hash === latestBlockReceived.previousHash) {
-            zCoin.generateNextBlock(latestBlockReceived.data);
+            zCoin.getChain().push(latestBlockReceived);
             broadcast(responseLatestMsg());
         } else {
             broadcast(responseChainMsg());
@@ -211,21 +227,35 @@ const initErrorHandler = (ws: WebSocket) => {
     ws.on('error', () => closeConnection(ws));
 };
 
-const HTTP_PORT = Number(process.env.HTTP_PORT) || 3001;
+const HTTP_PORT = Number(process.env.PORT) || Number(process.env.HTTP_PORT) || 3001;
 const P2P_PORT = Number(process.env.P2P_PORT) || 6001;
 
 const app = express();
 
-app.use(cors());
+app.use(cors({ origin: '*' })); // Cloud deployment ke liye flexible CORS
 app.use(express.json());
 
 app.get('/blocks', (req: Request, res: Response) => {
     res.send(zCoin.getChain());
 });
 
+app.get('/mempool', (req: Request, res: Response) => {
+    res.send(zCoin.mempool);
+});
+
+app.post('/transact', (req: Request, res: Response) => {
+    const { sender, receiver, amount } = req.body;
+    if (!sender || !receiver || !amount) {
+        return res.status(400).send({ error: 'Invalid transaction parameters' });
+    }
+    const tx = new Transaction(sender, receiver, Number(amount));
+    zCoin.addTransactionToMempool(tx);
+    res.send({ status: 'Transaction added to mempool', tx });
+});
+
 app.post('/mineBlock', (req: Request, res: Response) => {
-    const data = req.body.data || 'Default z-coin transaction';
-    const newBlock = zCoin.generateNextBlock(data);
+    const minerAddress = req.body.minerAddress || 'Default Miner';
+    const newBlock = zCoin.generateNextBlock(minerAddress);
     broadcast(responseLatestMsg());
     res.send(newBlock);
 });
